@@ -1,3 +1,11 @@
-run_sim_only:
-python experiments/sim/run_swap_only.py --out data/raw/sim_swap_only.csv --m 8 16 32 --E 4 8 16 --shots 512 1024 4096 --reps 5 --seed 123
-python experiments/sim/run_swap_extended.py --out data/raw/sim_swap_extended.csv --m 64 128 --E 8 16 --shots 2048 4096 --reps 5 --seed 123 --dim 256
+n: dimensión del vector
+m: dimensión del vector reducido
+Hay 20.000 ejecuciones por cada par n,m
+
+n=64   →  m=16, 32 (n=64, m=16) (n=64, m=32)
+n=128  →  m=32, 64 (n=128, m=32) (n=128, m=64)
+n=256  →  m=64, 128 (n=256, m=54) (n=256, m=128)
+n=512  →  m=128, 256 (n=512, m=128) (n=512, m=256)
+n=1024 →  m=256, 512 (n=1024, m=256) (n=1024, m=512)
+
+
