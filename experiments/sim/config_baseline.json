@@ -1,0 +1,13 @@
+{
+  "dims": [256],
+  "cos_targets": [0.2, 0.5, 0.7, 0.9],
+  "shots_list": [4096],
+  "m_list": [128],
+  "E_list": [32],
+  "reps": 20,
+  "output_csv": "data/raw/baseline_reps_2.csv",
+  "include_classical": true,
+  "measure_cost": false,
+  "opt_level": 2,
+  "base_seed0": 0
+}

@@ -1,0 +1,40 @@
+# --- Python build files ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pkl
+
+# --- Virtual envs ---
+.venv/
+venv/
+env/
+
+# --- Secrets ---
+config_secrets.json
+config_secrets*.json
+*.secrets.json
+
+# --- VSCode ---
+.vscode/
+
+# --- Data outputs (raw experiment results) ---
+data/raw/*.csv
+
+# Si quieres subir algunos CSV concretos, comenta lo anterior.
+# Pero en general: LOS RESULTADOS CRUDOS NO SE SUBEN A Q1
+
+# --- Figures (opcionales) ---
+# Si las figuras se regeneran, puedes ignorarlas:
+# data/figs/
+
+# --- OS / Editor ---
+.DS_Store
+Thumbs.db
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- Logs ---
+*.log
+logs/

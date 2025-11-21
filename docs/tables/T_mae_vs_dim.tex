@@ -1,0 +1,23 @@
+\begin{table}[t]
+\centering
+\caption{Mean absolute error (MAE) as a function of dimension (4096 shots).}
+\label{tab:mae_vs_dim}
+\begin{tabular}{cccc}
+\toprule
+\textbf{Dim} & \textbf{Method} & \textbf{MAE (mean)} & \textbf{Regime} \\
+\midrule
+64 & AE-SWAP & 0.0150 & low \\
+64 & PES & 0.0452 & low \\
+128 & AE-SWAP & 0.0201 & low \\
+128 & PES & 0.0514 & low \\
+256 & AE-SWAP & 0.0194 & low \\
+256 & PES & 0.0450 & low \\
+512 & AE-SWAP & 0.0160 & high \\
+512 & PES & 0.0105 & high \\
+1024 & AE-SWAP & 0.0158 & high \\
+1024 & PES & 0.0124 & high \\
+2048 & AE-SWAP & 0.0186 & high \\
+2048 & PES & 0.0106 & high \\
+\bottomrule
+\end{tabular}
+\end{table}

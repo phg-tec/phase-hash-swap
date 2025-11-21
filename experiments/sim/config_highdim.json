@@ -1,0 +1,13 @@
+{
+  "dims": [512, 1024, 2048],
+  "cos_targets": [0.2, 0.5, 0.7, 0.9],
+  "shots_list": [4096],
+  "m_list": [128, 256, 512],
+  "E_list": [16, 32],
+  "reps": 10,
+  "output_csv": "data/raw/compare_swap_highdim.csv",
+  "include_classical": false,
+  "measure_cost": true,
+  "opt_level": 3,
+  "base_seed0": 0
+}
