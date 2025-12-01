@@ -245,7 +245,6 @@ def run_pes_miniswap(x, y, centers, shots=4096, seed=123, opt_level=3):
     _, idx_y = quantize_to_centers(y, centers)
 
     groups = get_all_binary_groups(idx_x, idx_y, centers)
-    print(groups)
     d = len(x)
 
     cos_est = 0.0
@@ -291,7 +290,7 @@ if __name__ == "__main__":
     rhos = [-0.9, -0.5, 0, 0.5, 0.9]
 
     print("\n=== AE-SWAP vs PES-DATA-DRIVEN vs PES-MINI-SWAP (SIN HASHING) ===\n")
-    print("rho | cos_real | AE | PES-DD | PES-min | MAE_AE | MAE_DD | MAE_MINI")
+    print("rho | cos_real | AE | PES-DD | MAE_AE | MAE_DD")
 
     for i, rho in enumerate(rhos):
         seed = 1000 + i
@@ -305,10 +304,7 @@ if __name__ == "__main__":
             x, y, centers, shots=shots, seed=seed
         )
 
-        _, cos_mini, mae_mini = run_pes_miniswap(
-            x, y, centers, shots=shots, seed=seed
-        )
 
         mae_ae = abs(cos_real - cos_ae)
 
-        print(f"{rho:+.2f} | {cos_real:+.3f} | {cos_ae:+.3f} | {cos_pes:+.3f} | {cos_mini:+.3f} | {mae_ae:.3f} | {mae_pes:.3f} | {mae_mini:.3f}")
+        print(f"{rho:+.2f} | {cos_real:+.3f} | {cos_ae:+.3f} | {cos_pes:+.3f} | {mae_ae:.3f}")
