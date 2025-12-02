@@ -467,8 +467,8 @@ def main():
     parser.add_argument("--dim", type=int, default=256)
     parser.add_argument("--K", type=int, default=4)
     parser.add_argument("--shots", type=int, default=4096)
-    parser.add_argument("--alpha", type=float, default=np.pi)
-    parser.add_argument("--seed0", type=int, default=1000)
+    parser.add_argument("--alpha", type=float, default=np.pi/4)
+    parser.add_argument("--seed0", type=int, default=123)
     args = parser.parse_args()
 
     dim = args.dim
