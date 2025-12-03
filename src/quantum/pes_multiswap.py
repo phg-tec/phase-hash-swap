@@ -11,7 +11,7 @@ from qiskit.circuit.library import DiagonalGate
 from qiskit_aer import AerSimulator
 
 from src.utils.basic import cos_sim
-from src.utils.discretization import quantize_to_centers
+from src.utils.discretization import quantize_to_centers, kmeans_to_centers
 
 
 # ============================================================
@@ -28,14 +28,51 @@ def build_partition_groups_from_indices(idx_x, idx_y, centers):
     """
     idx_x = np.asarray(idx_x, int)
     idx_y = np.asarray(idx_y, int)
+    K = max(idx_x.max(), idx_y.max()) + 1
 
-    groups = defaultdict(list)
-    for i in range(len(idx_x)):
-        k = idx_x[i]
-        l = idx_y[i]
-        groups[(k, l)].append(i)
+    # Primero construimos los grupos básicos crudos
+    raw_groups = defaultdict(list)
+    for t in range(len(idx_x)):
+        i = idx_x[t]
+        j = idx_y[t]
+        raw_groups[(i, j)].append(t)
 
-    return groups
+    # Estructura para grupos fusionados
+    fused = defaultdict(list)
+
+    # 1) Procesar primero los off-diagonales
+    offdiag_pending = []  # diagonales pendientes de reasignación
+
+    for (i, j), elements in raw_groups.items():
+        if i != j:
+            # grupo canónico
+            key = (min(i, j), max(i, j))
+            fused[key].extend(elements)
+        else:
+            # diagonal (i,i) → hay que reasignarlo luego
+            offdiag_pending.append((i, elements))
+
+    # 2) Reasignar los grupos diagonales (i,i)
+    for (i, elems) in offdiag_pending:
+        # buscar todos los grupos donde aparece i
+        candidates = [(key, fused[key]) for key in fused.keys()
+                                          if i in key]
+
+        if len(candidates) == 0:
+            # no existe ningún grupo relacionado con i
+            # creamos un grupo ficticio con algún vecino ficticio
+            # pero debe cumplir a<b
+            fake_key = (i, i+1)
+            fused[fake_key] = []
+            candidates = [(fake_key, fused[fake_key])]
+
+        # elegir el grupo con menor tamaño actual
+        best_key = min(candidates, key=lambda kv: len(kv[1]))[0]
+
+        # añadir los elementos de la diagonal
+        fused[best_key].extend(elems)
+
+    return fused
 
 
 def classical_cos_from_groups_quantized(qx, qy, groups):
@@ -137,6 +174,35 @@ def values_to_unit_complex(values: np.ndarray) -> np.ndarray:
     values = np.asarray(values, float)
     return np.array([real_to_unit_complex(v) for v in values], dtype=complex)
 
+"""
+def build_phase_state_from_values(diag_vals: np.ndarray) -> QuantumCircuit:
+
+    diag_vals = np.asarray(diag_vals, complex)
+    m = len(diag_vals)
+    n = int(log2(m))
+    if 2 ** n != m:
+        raise ValueError("build_phase_state_from_values: longitud no potencia de 2")
+
+    # Extraemos la parte real
+    real_parts = np.real(diag_vals)
+
+    # Codificamos como e^{i * theta}
+    encoded_phases = np.exp(1j * real_parts)
+
+    # Construimos el circuito
+    qr = QuantumRegister(n, "data")
+    qc = QuantumCircuit(qr, name="phase_state")
+
+    # Estado uniforme
+    qc.h(qr)
+
+    # Puerta diagonal con las fases codificadas
+    diag_gate = DiagonalGate(encoded_phases.tolist())
+    qc.append(diag_gate, qr)
+
+    return qc
+
+"""
 
 def build_phase_state_from_values(diag_vals: np.ndarray) -> QuantumCircuit:
     """
@@ -261,6 +327,7 @@ def estimate_cosine_group_quantum_phase(sub_a,
         return 0.0
 
     p0_hat = run_phase_swap(sub_a, sub_b, alpha=alpha, shots=shots, backend=backend)
+    print(p0_hat)
     val = max(0.0, 2.0 * p0_hat - 1.0)
     overlap_mag = math.sqrt(val)
 
@@ -304,7 +371,8 @@ def run_pes_multiswap_phase(x,
     # Discretización
     qx, idx_x = quantize_to_centers(x, centers)
     qy, idx_y = quantize_to_centers(y, centers)
-
+    #qx, idx_x = kmeans_to_centers(x, len(centers))
+    #qy, idx_y = kmeans_to_centers(y, len(centers))
     # Partición en grupos
     groups = build_partition_groups_from_indices(idx_x, idx_y, centers)
 
@@ -362,12 +430,13 @@ def run_pes_multiswap_phase(x,
 
     cos_real = cos_sim(x, y)
     mae_ms = abs(cos_real - cos_hat)
-
+    print(f"Numero de grupos = {len(groups)}")
     if verbose:
         print("\n=== DETALLE GRUPOS (k,l) ===")
         for key in sorted(groups.keys()):
             print(
                 f"Grupo {key}: n={len(groups[key]):3d}, "
+                f"Valor {groups[key]}"
                 f"cl={cos_g_classic[key]: .4f}, "
                 f"cu={cos_g_quantum[key]: .4f}"
             )

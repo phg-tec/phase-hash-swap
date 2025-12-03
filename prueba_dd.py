@@ -88,6 +88,7 @@ def build_phase_state(complex_vals):
 
     qc.h(qr)
     qc.append(DiagonalGate(complex_vals.tolist()), qr[:])
+    print(complex_vals.tolist()[:5])
     return qc
 
 
@@ -159,7 +160,6 @@ def run_kmeans_centers_experiment(
         # discretización K-means(2)
         x_disc, centers_x = kmeans_to_centers(x_real, K)
         y_disc, centers_y = kmeans_to_centers(y_real, K)
-        print(centers_x, centers_y)
         # coseno sobre los valores-centro
         cos_r = cos_sim(x_disc, y_disc)
 

@@ -53,22 +53,22 @@ def main():
     alpha = args.alpha
     seed = args.seed0
 
-    rhos = [-0.9, -0.5, -0.25, 0.0, 0.25, 0.5, 0.9]
+    rhos = [0.9, 0.75, 0.5, 0.25, 0.0, -0.25, -0.5, -0.75, -0.9]
 
     print("\n=== AE-SWAP vs PES-MULTISWAP ===\n")
-    print("rho | real | classic_disc | quantum_disc | MAE_class | MAE_quant | Δ(class-quant) | t_AE | t_PES | t_pre")
+    print("Real | classic_disc | quantum_disc | MAE_class | MAE_quant | Δ(class-quant) | t_AE | t_PES | t_pre")
 
     for i, rho in enumerate(rhos):
-
+        seed+=i
         x, y = make_pair_with_cosine(dim, rho, seed)
         cos_real = cos_sim(x, y)
 
         centers = learn_kmeans_centers(x, y, K=K, seed=seed)
 
         # --- AE-SWAP ---
-        cos_ae, t_ae = run_ae_swap(x, y, shots=shots, seed=seed)
-        mae_ae = abs(cos_real - cos_ae)
-
+        #cos_ae, t_ae = run_ae_swap(x, y, shots=shots, seed=seed)
+        #mae_ae = abs(cos_real - cos_ae)
+        mae_ae, cos_ae, t_ae = 0,0,0
         # --- PES-MULTISWAP ---
         (cos_real_ms, cos_pes_ms, mae_ms, cos_classic,
          t_pre, t_pes) = run_pes_multiswap_phase(
@@ -82,7 +82,7 @@ def main():
         mae_classic = abs(cos_real - cos_classic)
         diff_classic_quantum = abs(cos_classic - cos_pes_ms)
 
-        print(f"{rho:+.2f} | "
+        print(
               f"real={cos_real:+.3f} | "
               f"classic_disc={cos_classic:+.3f} | "
               f"quantum_disc={cos_pes_ms:+.3f} | "
