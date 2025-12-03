@@ -135,6 +135,7 @@ def pad_values_to_power_of_two(values: np.ndarray) -> np.ndarray:
     Rellena el vector de valores (reales o complejos) hasta la siguiente
     potencia de 2. Los elementos nuevos se ponen a 1 (fase identidad).
     """
+    
     values = np.asarray(values)
     L = len(values)
     m = next_power_of_two(L)
@@ -201,18 +202,10 @@ def build_phase_state_from_values(diag_vals: np.ndarray) -> QuantumCircuit:
     qc.append(diag_gate, qr)
 
     return qc
-
 """
 
 def build_phase_state_from_values(diag_vals: np.ndarray) -> QuantumCircuit:
-    """
-    Construye el estado:
 
-      |ψ⟩ = (1/√m) Σ_i diag_vals[i] |i>
-
-    donde diag_vals[i] son complejos de módulo 1 (fases en el círculo unitario),
-    sobre log2(m) qubits.
-    """
     diag_vals = np.asarray(diag_vals, complex)
     m = len(diag_vals)
     n = int(log2(m))
@@ -327,7 +320,7 @@ def estimate_cosine_group_quantum_phase(sub_a,
         return 0.0
 
     p0_hat = run_phase_swap(sub_a, sub_b, alpha=alpha, shots=shots, backend=backend)
-    print(p0_hat)
+#    print(p0_hat)
     val = max(0.0, 2.0 * p0_hat - 1.0)
     overlap_mag = math.sqrt(val)
 
@@ -337,6 +330,61 @@ def estimate_cosine_group_quantum_phase(sub_a,
 
     return float(sign_classic * overlap_mag)
 
+def merge_singleton_groups(groups):
+    """
+    Toma un dict (k,l) -> lista_de_indices y fusiona los grupos que tengan
+    solo 1 índice con otros grupos, de forma que al final no quede ningún
+    grupo de tamaño 1 (salvo el caso degenerado de que solo exista 1 grupo).
+
+    Estrategia:
+      - Para un grupo (k,l) con 1 índice:
+          * Buscar candidatos que compartan k o l: (k, * ) o ( *, l )
+          * Si no hay, usar cualquier otro grupo
+          * Fusionar el índice en el grupo destino más pequeño
+    """
+    # Hacemos una copia "mutable" por si el dict original viene de un defaultdict
+    groups = {key: list(idxs) for key, idxs in groups.items()}
+
+    while True:
+        singletons = [key for key, idxs in groups.items() if len(idxs) == 1]
+
+        # Si no quedan grupos de tamaño 1, salimos
+        if not singletons:
+            break
+
+        key = singletons[0]
+        idx_list = groups[key]
+        # Seguridad: si por lo que sea está vacío, lo borramos y seguimos
+        if len(idx_list) == 0:
+            del groups[key]
+            continue
+
+        lone_idx = idx_list[0]
+        k, l = key
+
+        # Candidatos que compartan k o l
+        candidates = [
+            other for other in groups.keys()
+            if other != key and (other[0] == k or other[1] == l)
+        ]
+
+        # Si no hay candidatos "relacionados", usamos cualquier otro
+        if not candidates:
+            candidates = [other for other in groups.keys() if other != key]
+
+        # Si seguimos sin candidatos, significa que solo existe este grupo.
+        # Caso degenerado: no podemos evitar un único grupo de tamaño 1.
+        if not candidates:
+            break
+
+        # Elegimos el grupo destino con menor tamaño actual
+        target = min(candidates, key=lambda g: len(groups[g]))
+
+        # Movemos el índice al grupo destino y borramos el singleton
+        groups[target].append(lone_idx)
+        del groups[key]
+
+    return groups
 
 # ============================================================
 # Función principal PES-MULTISWAP
@@ -374,6 +422,7 @@ def run_pes_multiswap_phase(x,
     #qx, idx_x = kmeans_to_centers(x, len(centers))
     #qy, idx_y = kmeans_to_centers(y, len(centers))
     # Partición en grupos
+    groups = build_partition_groups_from_indices(idx_x, idx_y, centers)
     groups = build_partition_groups_from_indices(idx_x, idx_y, centers)
 
     # Coseno clásico estratificado (sobre valores-centro)
@@ -431,6 +480,8 @@ def run_pes_multiswap_phase(x,
     cos_real = cos_sim(x, y)
     mae_ms = abs(cos_real - cos_hat)
     print(f"Numero de grupos = {len(groups)}")
+    grupos_tam1 = sum(1 for g in groups.values() if len(g) == 1)
+    print(f"Grupos con 1 componente = {grupos_tam1}")
     if verbose:
         print("\n=== DETALLE GRUPOS (k,l) ===")
         for key in sorted(groups.keys()):
