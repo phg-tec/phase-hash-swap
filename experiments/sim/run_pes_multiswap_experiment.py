@@ -40,7 +40,7 @@ def main():
                         help="Número de centros K para k-means.")
     parser.add_argument("--shots", type=int, default=4096,
                         help="Número de shots para los SWAP tests.")
-    parser.add_argument("--alpha", type=float, default=np.pi / 4,
+    parser.add_argument("--alpha", type=float, default=0.0005,
                         help="Factor de escala de fase φ = α * valor.")
     parser.add_argument("--seed0", type=int, default=123,
                         help="Semilla base para generar pares (x,y).")
@@ -51,6 +51,7 @@ def main():
     K = args.K
     shots = args.shots
     alpha = args.alpha
+    seed = args.seed0
 
     rhos = [-0.9, -0.5, -0.25, 0.0, 0.25, 0.5, 0.9]
 
@@ -58,7 +59,6 @@ def main():
     print("rho | cos_real | AE | PES-MS | MAE_AE | MAE_MS | t_AE | t_PES | t_pre_PES")
 
     for i, rho in enumerate(rhos):
-        seed = args.seed0 + i
 
         x, y = make_pair_with_cosine(dim, rho, seed)
         cos_real = cos_sim(x, y)

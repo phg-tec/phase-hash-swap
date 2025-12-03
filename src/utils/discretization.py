@@ -14,7 +14,7 @@ def learn_kmeans_centers(x: np.ndarray,
     y = np.asarray(y, float)
     data = np.concatenate([x, y]).reshape(-1, 1)
 
-    km = KMeans(n_clusters=K, n_init=10, random_state=seed)
+    km = KMeans(n_clusters=K, n_init=1000, random_state=seed, max_iter=2000)
     km.fit(data)
     return np.sort(km.cluster_centers_.flatten())
 
@@ -34,9 +34,3 @@ def quantize_to_centers(v: np.ndarray, centers: np.ndarray):
     return centers[idx], idx
 
 
-def idx_to_phases(idx: np.ndarray, K: int) -> np.ndarray:
-    """
-    Convierte índices de nivel (0..K-1) en fases uniformes en [0, 2π).
-    """
-    idx = np.asarray(idx, int)
-    return 2.0 * np.pi * idx / float(K)

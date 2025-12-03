@@ -67,7 +67,7 @@ def classical_cos_from_groups_quantized(qx, qy, groups):
         Nb_g[key] = nb
 
         if na > 0.0 and nb > 0.0:
-            cos_g[key] = float(sub_a @ sub_b) / math.sqrt(na * nb)
+            cos_g[key] = float(sub_a @ sub_a) / math.sqrt(na * nb)
         else:
             cos_g[key] = 0.0
 
@@ -82,7 +82,7 @@ def classical_cos_from_groups_quantized(qx, qy, groups):
 
 
 # ============================================================
-# Utilidades de fase continua
+# Utilidades de fase / encoding complejo
 # ============================================================
 
 def next_power_of_two(m: int) -> int:
@@ -92,55 +92,95 @@ def next_power_of_two(m: int) -> int:
 
 
 def pad_values_to_power_of_two(values: np.ndarray) -> np.ndarray:
-    values = np.asarray(values, float)
+    """
+    Rellena el vector de valores (reales o complejos) hasta la siguiente
+    potencia de 2. Los elementos nuevos se ponen a 1 (fase identidad).
+    """
+    values = np.asarray(values)
     L = len(values)
     m = next_power_of_two(L)
     if m == L:
         return values
     pad_len = m - L
-    pad = np.zeros(pad_len)
+    pad = np.ones(pad_len, dtype=values.dtype)  # fase 1+0j para los extras
     return np.concatenate([values, pad])
 
 
-def build_phase_state_from_values(values: np.ndarray, alpha: float) -> QuantumCircuit:
+def real_to_unit_complex(c: float) -> complex:
+    """
+    Mapea un valor real c a un complejo de módulo 1:
+
+        c ↦ c ± i * sqrt(1 - c^2)
+
+    con el signo imaginario elegido para preservar el signo de c.
+
+    Si |c| > 1, se satura a [-1,1] antes de construir el complejo.
+    """
+    c = float(c)
+    if c > 1.0:
+        c = 1.0
+    if c < -1.0:
+        c = -1.0
+    imag = math.sqrt(max(0.0, 1.0 - c * c))
+    if c >= 0.0:
+        return c + 1j * imag
+    else:
+        return c - 1j * imag
+
+
+def values_to_unit_complex(values: np.ndarray) -> np.ndarray:
+    """
+    Aplica real_to_unit_complex componente a componente.
+    """
+    values = np.asarray(values, float)
+    return np.array([real_to_unit_complex(v) for v in values], dtype=complex)
+
+
+def build_phase_state_from_values(diag_vals: np.ndarray) -> QuantumCircuit:
     """
     Construye el estado:
 
-      |ψ⟩ = (1/√m) Σ_i e^{i * α * values[i]} |i>
+      |ψ⟩ = (1/√m) Σ_i diag_vals[i] |i>
 
+    donde diag_vals[i] son complejos de módulo 1 (fases en el círculo unitario),
     sobre log2(m) qubits.
     """
-    values = np.asarray(values, float)
-    m = len(values)
+    diag_vals = np.asarray(diag_vals, complex)
+    m = len(diag_vals)
     n = int(log2(m))
     if 2 ** n != m:
         raise ValueError("build_phase_state_from_values: longitud no potencia de 2")
-
-    phases = alpha * values
-    diag_vals = [np.exp(1j * phi) for phi in phases]
 
     qr = QuantumRegister(n, "data")
     qc = QuantumCircuit(qr, name="phase_state")
 
     qc.h(qr)
-    diag_gate = DiagonalGate(diag_vals)
+    diag_gate = DiagonalGate(diag_vals.tolist())
     qc.append(diag_gate, qr)
 
     return qc
 
 
-def build_phase_swap_circuit(sub_a, sub_b, alpha: float) -> QuantumCircuit:
+def build_phase_swap_circuit(sub_a, sub_b, alpha: float = None) -> QuantumCircuit:
     """
-    SWAP test entre dos estados de fase codificados a partir de
-    sub_a, sub_b (valores discretizados del grupo).
+    SWAP test entre dos estados de fase codificados a partir de sub_a, sub_b,
+    donde cada componente real se mapea a un complejo de módulo 1 mediante
+    real_to_unit_complex.
+
+    El parámetro alpha se mantiene por compatibilidad, pero NO se usa.
     """
     sub_a = np.asarray(sub_a, float)
     sub_b = np.asarray(sub_b, float)
     if len(sub_a) != len(sub_b):
         raise ValueError("build_phase_swap_circuit: longitudes distintas")
 
-    vals_a = pad_values_to_power_of_two(sub_a)
-    vals_b = pad_values_to_power_of_two(sub_b)
+    # 1) Mapeo real -> complejo de módulo 1
+    diag_a = values_to_unit_complex(sub_a)
+    diag_b = values_to_unit_complex(sub_b)
+
+    # 2) Relleno a potencia de 2 con fase identidad (1+0j)
+    vals_a = pad_values_to_power_of_two(diag_a)
+    vals_b = pad_values_to_power_of_two(diag_b)
 
     m = len(vals_a)
     n = int(log2(m))
@@ -152,8 +192,8 @@ def build_phase_swap_circuit(sub_a, sub_b, alpha: float) -> QuantumCircuit:
 
     qc = QuantumCircuit(anc, qa, qb, c, name="pes_multiswap_group")
 
-    phase_a = build_phase_state_from_values(vals_a, alpha)
-    phase_b = build_phase_state_from_values(vals_b, alpha)
+    phase_a = build_phase_state_from_values(vals_a)
+    phase_b = build_phase_state_from_values(vals_b)
 
     qc.compose(phase_a, qa, inplace=True)
     qc.compose(phase_b, qb, inplace=True)
@@ -169,16 +209,18 @@ def build_phase_swap_circuit(sub_a, sub_b, alpha: float) -> QuantumCircuit:
 
 def run_phase_swap(sub_a,
                    sub_b,
-                   alpha: float,
+                   alpha: float = None,
                    shots: int = 2048,
                    backend=None) -> float:
     """
     Ejecuta el SWAP de fase para un grupo y devuelve p0_hat.
+
+    alpha se ignora (encoding puramente geométrico en el círculo unitario).
     """
     if backend is None:
         backend = AerSimulator()
 
-    qc = build_phase_swap_circuit(sub_a, sub_b, alpha)
+    qc = build_phase_swap_circuit(sub_a, sub_b, alpha=alpha)
     tqc = transpile(qc, backend)  # optimization_level por defecto
     result = backend.run(tqc, shots=shots).result()
     counts = result.get_counts(tqc)
@@ -189,12 +231,17 @@ def run_phase_swap(sub_a,
 
 def estimate_cosine_group_quantum_phase(sub_a,
                                         sub_b,
-                                        alpha: float,
+                                        alpha: float = None,
                                         shots: int = 2048,
                                         backend=None) -> float:
     """
-    Estimador cuántico tipo PES para un grupo (k,l) usando
-    codificación de fase continua φ_i = α * valor_discretizado_i.
+    Estimador cuántico tipo PES para un grupo (k,l) usando el encoding
+    complejo en el círculo unitario aplicado a los valores discretizados
+    del grupo.
+
+    IMPORTANTE:
+      - El módulo del solapamiento |⟨ψ_a|ψ_b⟩| lo da el SWAP (vía p0).
+      - El signo lo seguimos metiendo de forma clásica, vía sub_a @ sub_b.
     """
     sub_a = np.asarray(sub_a, float)
     sub_b = np.asarray(sub_b, float)
@@ -211,7 +258,7 @@ def estimate_cosine_group_quantum_phase(sub_a,
     if na == 0.0 or nb == 0.0:
         return 0.0
 
-    p0_hat = run_phase_swap(sub_a, sub_b, alpha, shots=shots, backend=backend)
+    p0_hat = run_phase_swap(sub_a, sub_b, alpha=alpha, shots=shots, backend=backend)
     val = max(0.0, 2.0 * p0_hat - 1.0)
     overlap_mag = math.sqrt(val)
 
@@ -237,6 +284,9 @@ def run_pes_multiswap_phase(x,
     Devuelve:
       cos_real, cos_hat, mae_ms, cos_classic,
       t_preproc, t_quantum_pes
+
+    NOTA: el parámetro alpha se mantiene en la interfaz por compatibilidad,
+    pero el encoding actual NO depende de él (no hay α*valor).
     """
     sim = AerSimulator(seed_simulator=seed)
 
@@ -256,7 +306,7 @@ def run_pes_multiswap_phase(x,
     # Partición en grupos
     groups = build_partition_groups_from_indices(idx_x, idx_y, centers)
 
-    # Coseno clásico estratificado
+    # Coseno clásico estratificado (sobre valores-centro)
     cos_classic, cos_g_classic, Na_g, Nb_g = classical_cos_from_groups_quantized(
         qx, qy, groups
     )
@@ -298,7 +348,7 @@ def run_pes_multiswap_phase(x,
         cos_g_quantum[key] = val
 
     # -----------------------------
-    # (3) Agregación final
+    # (3) Agregación final estratificada
     # -----------------------------
     Na = sum(Na_g_q.values())
     Nb = sum(Nb_g_q.values())
