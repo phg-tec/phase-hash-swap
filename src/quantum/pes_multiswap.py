@@ -67,7 +67,8 @@ def classical_cos_from_groups_quantized(qx, qy, groups):
         Nb_g[key] = nb
 
         if na > 0.0 and nb > 0.0:
-            cos_g[key] = float(sub_a @ sub_a) / math.sqrt(na * nb)
+            # 🔧 AQUÍ ESTABA EL BUG: antes poníamos sub_a @ sub_a
+            cos_g[key] = float(sub_a @ sub_b) / math.sqrt(na * nb)
         else:
             cos_g[key] = 0.0
 
@@ -79,6 +80,7 @@ def classical_cos_from_groups_quantized(qx, qy, groups):
     num = sum(cos_g[g] * math.sqrt(Na_g[g] * Nb_g[g]) for g in groups)
     cos_hat = num / math.sqrt(Na * Nb)
     return cos_hat, cos_g, Na_g, Nb_g
+
 
 
 # ============================================================
@@ -310,7 +312,6 @@ def run_pes_multiswap_phase(x,
     cos_classic, cos_g_classic, Na_g, Nb_g = classical_cos_from_groups_quantized(
         qx, qy, groups
     )
-
     t1_pre = time.perf_counter()
     t_preproc = t1_pre - t0_pre
 

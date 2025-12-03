@@ -56,7 +56,7 @@ def main():
     rhos = [-0.9, -0.5, -0.25, 0.0, 0.25, 0.5, 0.9]
 
     print("\n=== AE-SWAP vs PES-MULTISWAP ===\n")
-    print("rho | cos_real | AE | PES-MS | MAE_AE | MAE_MS | t_AE | t_PES | t_pre_PES")
+    print("rho | real | classic_disc | quantum_disc | MAE_class | MAE_quant | Δ(class-quant) | t_AE | t_PES | t_pre")
 
     for i, rho in enumerate(rhos):
 
@@ -79,10 +79,19 @@ def main():
              verbose=False
          )
 
-        print(f"{rho:+.2f} | {cos_real:+.3f} | "
-              f"{cos_ae:+.3f} | {cos_pes_ms:+.3f} | "
-              f"{mae_ae:.3f} | {mae_ms:.3f} | "
-              f"{t_ae:.4f} | {t_pes:.4f} | {t_pre:.4f}")
+        mae_classic = abs(cos_real - cos_classic)
+        diff_classic_quantum = abs(cos_classic - cos_pes_ms)
+
+        print(f"{rho:+.2f} | "
+              f"real={cos_real:+.3f} | "
+              f"classic_disc={cos_classic:+.3f} | "
+              f"quantum_disc={cos_pes_ms:+.3f} | "
+              f"MAE_class={mae_classic:.3f} | "
+              f"MAE_quant={mae_ms:.3f} | "
+              f"Δ(class-q)={diff_classic_quantum:.3f} | "
+              f"t_AE={t_ae:.4f} | t_PES={t_pes:.4f} | t_pre={t_pre:.4f}"
+        )
+
 
 
 if __name__ == "__main__":
