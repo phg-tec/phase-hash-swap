@@ -3,14 +3,22 @@ import numpy as np
 import math
 
 
-def make_pair_with_cosine(d, rho, seed):
+def make_pair_with_cosine(dim, rho, seed=123):
+    """
+    Generate x,y in R^dim with cosine approximately rho.
+    Construction: y = rho*x + sqrt(1-rho^2)*z, z orthogonal to x.
+    """
     rng = np.random.default_rng(seed)
-    cov = np.array([[1.0, rho], [rho, 1.0]])
-    L = np.linalg.cholesky(cov)
-    z = rng.normal(size=(2, d))
-    xy = L @ z
-    x, y = xy[0], xy[1]
-    return x, y   # NO NORMALIZAR
+    x = rng.standard_normal(dim)
+    x /= np.linalg.norm(x)
+
+    z = rng.standard_normal(dim)
+    z -= x * np.dot(x, z)
+    z /= np.linalg.norm(z)
+
+    y = rho * x + math.sqrt(max(0.0, 1 - rho**2)) * z
+    return x, y
+
 
 
 

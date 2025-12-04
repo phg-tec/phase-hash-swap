@@ -12,6 +12,7 @@ from qiskit_aer import AerSimulator
 
 from src.utils.basic import cos_sim
 from src.utils.discretization import quantize_to_centers, kmeans_to_centers
+from sklearn.cluster import KMeans
 
 
 # ============================================================
@@ -73,6 +74,52 @@ def build_partition_groups_from_indices(idx_x, idx_y, centers):
         fused[best_key].extend(elems)
 
     return fused
+
+
+def build_groups_kmeans_2d(qx, qy, n_groups: int, random_state: int = 123):
+    """
+    Agrupa las coordenadas por K-Means en el plano (qx, qy).
+
+    - qx, qy: vectores discretizados (mismas longitudes)
+    - n_groups: número de clusters (grupos) deseados
+    - random_state: semilla para reproducibilidad
+
+    Devuelve:
+      groups: dict g -> lista de índices i pertenecientes al cluster g
+    """
+    qx = np.asarray(qx, float)
+    qy = np.asarray(qy, float)
+    assert len(qx) == len(qy)
+    d = len(qx)
+
+    # No tiene sentido tener más grupos que dimensiones
+    n_groups = min(n_groups, d)
+    if n_groups <= 0:
+        # caso degenerado, todo en un único grupo
+        return {0: list(range(d))}
+
+    Z = np.stack([qx, qy], axis=1)  # shape (d, 2)
+
+    km = KMeans(n_clusters=n_groups, n_init=10, random_state=random_state)
+    labels = km.fit_predict(Z)
+    centers_2d = km.cluster_centers_
+
+    groups = defaultdict(list)
+    for idx, g in enumerate(labels):
+        groups[int(g)].append(idx)
+
+    # Opcional: fusionar clusters de tamaño 1 con el centro más cercano
+    for g, idxs in list(groups.items()):
+        if len(idxs) == 1 and len(groups) > 1:
+            idx = idxs[0]
+            v = Z[idx]
+            dists = np.linalg.norm(centers_2d - v, axis=1)
+            dists[g] = np.inf  # no se reasigna al mismo cluster
+            g2 = int(np.argmin(dists))
+            groups[g2].append(idx)
+            del groups[g]
+
+    return groups
 
 
 def classical_cos_from_groups_quantized(qx, qy, groups):
@@ -163,9 +210,9 @@ def real_to_unit_complex(c: float) -> complex:
         c = -1.0
     imag = math.sqrt(max(0.0, 1.0 - c * c))
     if c >= 0.0:
-        return c + 1j * imag
-    else:
         return c - 1j * imag
+    else:
+        return c + 1j * imag
 
 
 def values_to_unit_complex(values: np.ndarray) -> np.ndarray:
@@ -175,34 +222,6 @@ def values_to_unit_complex(values: np.ndarray) -> np.ndarray:
     values = np.asarray(values, float)
     return np.array([real_to_unit_complex(v) for v in values], dtype=complex)
 
-"""
-def build_phase_state_from_values(diag_vals: np.ndarray) -> QuantumCircuit:
-
-    diag_vals = np.asarray(diag_vals, complex)
-    m = len(diag_vals)
-    n = int(log2(m))
-    if 2 ** n != m:
-        raise ValueError("build_phase_state_from_values: longitud no potencia de 2")
-
-    # Extraemos la parte real
-    real_parts = np.real(diag_vals)
-
-    # Codificamos como e^{i * theta}
-    encoded_phases = np.exp(1j * real_parts)
-
-    # Construimos el circuito
-    qr = QuantumRegister(n, "data")
-    qc = QuantumCircuit(qr, name="phase_state")
-
-    # Estado uniforme
-    qc.h(qr)
-
-    # Puerta diagonal con las fases codificadas
-    diag_gate = DiagonalGate(encoded_phases.tolist())
-    qc.append(diag_gate, qr)
-
-    return qc
-"""
 
 def build_phase_state_from_values(diag_vals: np.ndarray) -> QuantumCircuit:
 
@@ -307,12 +326,6 @@ def estimate_cosine_group_quantum_phase(sub_a,
     sub_a = np.asarray(sub_a, float)
     sub_b = np.asarray(sub_b, float)
 
-    # Grupo trivial de tamaño 1: usamos signo clásico (magnitud 1)
-    if len(sub_a) == 1:
-        sign_classic = np.sign(sub_a[0] * sub_b[0])
-        if sign_classic == 0.0:
-            sign_classic = 1.0
-        return float(sign_classic)
 
     na = float(sub_a @ sub_a)
     nb = float(sub_b @ sub_b)
@@ -320,7 +333,6 @@ def estimate_cosine_group_quantum_phase(sub_a,
         return 0.0
 
     p0_hat = run_phase_swap(sub_a, sub_b, alpha=alpha, shots=shots, backend=backend)
-#    print(p0_hat)
     val = max(0.0, 2.0 * p0_hat - 1.0)
     overlap_mag = math.sqrt(val)
 
@@ -328,87 +340,77 @@ def estimate_cosine_group_quantum_phase(sub_a,
     if sign_classic == 0.0:
         sign_classic = 1.0
 
-    return float(sign_classic * overlap_mag)
+    return float(sign_classic * overlap_mag), p0_hat
 
 def merge_singleton_groups(groups):
     """
-    Toma un dict (k,l) -> lista_de_indices y fusiona los grupos que tengan
-    solo 1 índice con otros grupos, de forma que al final no quede ningún
-    grupo de tamaño 1 (salvo el caso degenerado de que solo exista 1 grupo).
+    Fusión mínima y correcta para PES-MULTISWAP:
+    Solo fusiona grupos de tamaño 1 con OTROS GRUPOS QUE COMPARTEN
+    EXACTAMENTE EL MISMO PAR (k,l).
 
-    Estrategia:
-      - Para un grupo (k,l) con 1 índice:
-          * Buscar candidatos que compartan k o l: (k, * ) o ( *, l )
-          * Si no hay, usar cualquier otro grupo
-          * Fusionar el índice en el grupo destino más pequeño
+    Si no existe ningún otro grupo (k,l), se fusiona con el grupo más pequeño existente,
+    pero esto solo ocurre en casos degenerados y muy raros.
     """
-    # Hacemos una copia "mutable" por si el dict original viene de un defaultdict
+
+    # Copia limpia del diccionario
     groups = {key: list(idxs) for key, idxs in groups.items()}
 
     while True:
+        # Detectar singletons
         singletons = [key for key, idxs in groups.items() if len(idxs) == 1]
-
-        # Si no quedan grupos de tamaño 1, salimos
         if not singletons:
             break
 
         key = singletons[0]
-        idx_list = groups[key]
-        # Seguridad: si por lo que sea está vacío, lo borramos y seguimos
-        if len(idx_list) == 0:
-            del groups[key]
-            continue
-
-        lone_idx = idx_list[0]
         k, l = key
+        lone_val = groups[key][0]
 
-        # Candidatos que compartan k o l
-        candidates = [
-            other for other in groups.keys()
-            if other != key and (other[0] == k or other[1] == l)
-        ]
+        # Buscar OTROS grupos exactamente con la misma clave (k,l)
+        candidates = [other for other in groups.keys()
+                      if other != key and other == key]
 
-        # Si no hay candidatos "relacionados", usamos cualquier otro
+        # En la práctica lo anterior puede ser vacío, porque los grupos (k,l)
+        # están definidos de forma única.
+        # Entonces, buscamos grupos que representen el MISMO par (k,l)
+        # en casos donde se haya fusionado previamente (por robustez):
+        candidates = [other for other in groups.keys()
+                      if other != key and other[0] == k and other[1] == l]
+
+        # Si no existe ninguno, caso degenerado:
+        # fusionar con el grupo más pequeño disponible.
         if not candidates:
             candidates = [other for other in groups.keys() if other != key]
 
-        # Si seguimos sin candidatos, significa que solo existe este grupo.
-        # Caso degenerado: no podemos evitar un único grupo de tamaño 1.
         if not candidates:
+            # solo quedaba 1 grupo, no se puede hacer nada
             break
 
-        # Elegimos el grupo destino con menor tamaño actual
+        # Elegir el más pequeño para mantener equilibrio
         target = min(candidates, key=lambda g: len(groups[g]))
 
-        # Movemos el índice al grupo destino y borramos el singleton
-        groups[target].append(lone_idx)
+        # mover valor
+        groups[target].append(lone_val)
         del groups[key]
 
     return groups
+
+
 
 # ============================================================
 # Función principal PES-MULTISWAP
 # ============================================================
 
-def run_pes_multiswap_phase(x,
-                            y,
-                            centers,
-                            alpha: float = math.pi,
-                            shots: int = 2048,
-                            seed: int = 123,
-                            verbose: bool = False):
-    """
-    Devuelve:
-      cos_real, cos_hat, mae_ms, cos_classic,
-      t_preproc, t_quantum_pes
+def run_pes_multiswap_phase(
+        x, y, centers,
+        alpha: float = math.pi,
+        shots: int = 2048,
+        seed: int = 123,
+        verbose: bool = False):
 
-    NOTA: el parámetro alpha se mantiene en la interfaz por compatibilidad,
-    pero el encoding actual NO depende de él (no hay α*valor).
-    """
     sim = AerSimulator(seed_simulator=seed)
 
     # -----------------------------
-    #  (1) Preprocesado clásico
+    # (1) Preprocesado clásico
     # -----------------------------
     t0_pre = time.perf_counter()
 
@@ -419,78 +421,124 @@ def run_pes_multiswap_phase(x,
     # Discretización
     qx, idx_x = quantize_to_centers(x, centers)
     qy, idx_y = quantize_to_centers(y, centers)
-    #qx, idx_x = kmeans_to_centers(x, len(centers))
-    #qy, idx_y = kmeans_to_centers(y, len(centers))
-    # Partición en grupos
-    groups = build_partition_groups_from_indices(idx_x, idx_y, centers)
-    groups = build_partition_groups_from_indices(idx_x, idx_y, centers)
 
-    # Coseno clásico estratificado (sobre valores-centro)
+    # Agrupación por pares de centros (k,l)
+    groups = build_partition_groups_from_indices(idx_x, idx_y, centers)
+    groups = merge_singleton_groups(groups)
+
+    n_single = sum(1 for g in groups.values() if len(g) == 1)
+    print(f"Grupos tamaño 1 tras Singleton = {n_single}")
+
+    # Cálculo clásico estratificado
     cos_classic, cos_g_classic, Na_g, Nb_g = classical_cos_from_groups_quantized(
         qx, qy, groups
     )
-    t1_pre = time.perf_counter()
-    t_preproc = t1_pre - t0_pre
+
+    t_preproc = time.perf_counter() - t0_pre
 
     # -----------------------------
-    # (2) Tiempo cuántico por grupos
+    # (2) Evaluación cuántica por grupos
     # -----------------------------
     t_quantum_pes = 0.0
 
     cos_g_quantum = {}
     Na_g_q = {}
     Nb_g_q = {}
+    p0_g_list = []
 
     for key, idxs in groups.items():
+
         idxs = np.asarray(idxs, int)
         sub_a = qx[idxs]
         sub_b = qy[idxs]
 
         na = float(sub_a @ sub_a)
         nb = float(sub_b @ sub_b)
+
         Na_g_q[key] = na
         Nb_g_q[key] = nb
 
         if na == 0.0 or nb == 0.0:
             cos_g_quantum[key] = 0.0
+            p0_g_list.append(0.5)
             continue
 
-        # Tiempo cuántico del grupo
-        tg0 = time.perf_counter()
-        val = estimate_cosine_group_quantum_phase(
-            sub_a, sub_b, alpha=alpha, shots=shots, backend=sim
+        t0 = time.perf_counter()
+        cos_val, p0_hat = estimate_cosine_group_quantum_phase(
+            sub_a, sub_b,
+            alpha=alpha,
+            shots=shots,
+            backend=sim
         )
-        tg1 = time.perf_counter()
+        t_quantum_pes += time.perf_counter() - t0
 
-        t_quantum_pes += (tg1 - tg0)
-        cos_g_quantum[key] = val
+        cos_g_quantum[key] = cos_val
+        p0_g_list.append(p0_hat)
 
     # -----------------------------
-    # (3) Agregación final estratificada
+    # (3) Agregación del coseno global
     # -----------------------------
     Na = sum(Na_g_q.values())
     Nb = sum(Nb_g_q.values())
+
     if Na == 0.0 or Nb == 0.0:
-        cos_hat = 0.0
+        cos_quantum_global = 0.0
     else:
-        num = sum(cos_g_quantum[g] * math.sqrt(Na_g_q[g] * Nb_g_q[g])
-                  for g in groups)
-        cos_hat = num / math.sqrt(Na * Nb)
+        numer = sum(
+            cos_g_quantum[g] * math.sqrt(Na_g_q[g] * Nb_g_q[g])
+            for g in groups
+        )
+        cos_quantum_global = numer / math.sqrt(Na * Nb)
 
-    cos_real = cos_sim(x, y)
-    mae_ms = abs(cos_real - cos_hat)
-    print(f"Numero de grupos = {len(groups)}")
-    grupos_tam1 = sum(1 for g in groups.values() if len(g) == 1)
-    print(f"Grupos con 1 componente = {grupos_tam1}")
-    if verbose:
-        print("\n=== DETALLE GRUPOS (k,l) ===")
-        for key in sorted(groups.keys()):
-            print(
-                f"Grupo {key}: n={len(groups[key]):3d}, "
-                f"Valor {groups[key]}"
-                f"cl={cos_g_classic[key]: .4f}, "
-                f"cu={cos_g_quantum[key]: .4f}"
-            )
+    # -----------------------------
+    # (4) Cálculo del p0_global desde M (único correcto)
+    # -----------------------------
+    if Na == 0.0 or Nb == 0.0:
+        p0_global = 0.5
+    else:
+        numer_M = sum(
+            math.sqrt(max(0.0, 2.0 * p0g - 1.0)) * math.sqrt(Na_g_q[key] * Nb_g_q[key])
+            for (key, p0g) in zip(groups.keys(), p0_g_list)
+        )
+        M = numer_M / math.sqrt(Na * Nb)
+        p0_global = (1.0 + M * M) / 2.0
 
-    return (cos_real, cos_hat, mae_ms, cos_classic,
-            t_preproc, t_quantum_pes)
+    # -----------------------------
+    # (5) Comparación por grupos: p0_real_g vs p0_quant_g
+    # -----------------------------
+    p0_real_g = {}
+    p0_quant_g = {}
+
+    for (g, idxs), p0g in zip(groups.items(), p0_g_list):
+        sub_a = qx[idxs]
+        sub_b = qy[idxs]
+
+        na = float(sub_a @ sub_a)
+        nb = float(sub_b @ sub_b)
+
+        if na == 0.0 or nb == 0.0:
+            p0_real_g[g] = 0.5
+        else:
+            cosg = float(sub_a @ sub_b) / math.sqrt(na * nb)
+            p0_real_g[g] = (1.0 + cosg * cosg) / 2.0
+
+        p0_quant_g[g] = p0g
+
+    cos_quantum_global = math.sqrt(max(0, 2*p0_global-1))
+    # -----------------------------
+    # (6) Resultados finales
+    # -----------------------------
+    cos_real_global = cos_sim(x, y)
+    cos_mae = abs(cos_real_global - cos_quantum_global)
+
+    return {
+        "cos_real": cos_real_global,
+        "cos_quantum": cos_quantum_global,
+        "cos_mae": cos_mae,
+        "p0_real_g": p0_real_g,
+        "p0_quant_g": p0_quant_g,
+        "p0_global": p0_global,
+        "t_pre": t_preproc,
+        "t_pes": t_quantum_pes,
+        "groups": groups
+    }
