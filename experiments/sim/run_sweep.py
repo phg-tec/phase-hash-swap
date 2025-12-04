@@ -102,20 +102,13 @@ def main(config_path):
                                     measure_cost=True
                                 )
                             else:
-                                model = PhaseEmbeddingCosModel()
-                                state = torch.load("results/phase_embedding_bin.pt", map_location="cpu")
-                                model.load_state_dict(state)
-                                model.eval()
 
-                                value_to_id = {-1.0: 0, 1.0: 1}
 
                                 cos_ph, t_ph, p0_pes = run_swap_phasehash(
                                     x, y,
                                     m=m, E=E,
                                     shots=shots,
                                     seed=base_seed + m + E,
-                                    phase_model=model,
-                                    value_to_id=value_to_id,
                                     measure_cost=False
                                 )
                                 d_ph, q_ph = "-", "-"
