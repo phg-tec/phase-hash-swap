@@ -418,20 +418,25 @@ def run_pes_multiswap_phase(
     y = np.asarray(y, float)
     centers = np.asarray(centers, float)
 
-    # Discretización
+
+    maxabs = max(np.max(np.abs(x)), np.max(np.abs(y)))
+    if maxabs == 0:
+        maxabs = 1.0
+    x = x / maxabs
+    y = y / maxabs
+
+    # Discretización para elegir grupos (pero no para el SWAP)
     qx, idx_x = quantize_to_centers(x, centers)
     qy, idx_y = quantize_to_centers(y, centers)
 
-    # Agrupación por pares de centros (k,l)
     groups = build_partition_groups_from_indices(idx_x, idx_y, centers)
     groups = merge_singleton_groups(groups)
-
     n_single = sum(1 for g in groups.values() if len(g) == 1)
     print(f"Grupos tamaño 1 tras Singleton = {n_single}")
 
-    # Cálculo clásico estratificado
+    # Clásico estratificado usando los valores reales
     cos_classic, cos_g_classic, Na_g, Nb_g = classical_cos_from_groups_quantized(
-        qx, qy, groups
+        x, y, groups
     )
 
     t_preproc = time.perf_counter() - t0_pre
@@ -447,13 +452,15 @@ def run_pes_multiswap_phase(
     p0_g_list = []
 
     for key, idxs in groups.items():
-
         idxs = np.asarray(idxs, int)
-        sub_a = qx[idxs]
-        sub_b = qy[idxs]
+
+        # Usar valores reales
+        sub_a = x[idxs]
+        sub_b = y[idxs]
 
         na = float(sub_a @ sub_a)
         nb = float(sub_b @ sub_b)
+
 
         Na_g_q[key] = na
         Nb_g_q[key] = nb
@@ -510,8 +517,8 @@ def run_pes_multiswap_phase(
     p0_quant_g = {}
 
     for (g, idxs), p0g in zip(groups.items(), p0_g_list):
-        sub_a = qx[idxs]
-        sub_b = qy[idxs]
+        sub_a = x[idxs]
+        sub_b = y[idxs]
 
         na = float(sub_a @ sub_a)
         nb = float(sub_b @ sub_b)

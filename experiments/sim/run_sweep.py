@@ -9,12 +9,11 @@ import json
 from pathlib import Path
 import pandas as pd
 
-import sys
-import os
-
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
+import os,sys
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..", ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 
 from src.quantum.swap_core import (
@@ -24,6 +23,9 @@ from src.quantum.swap_core import (
     run_swap_phasehash,
     corr_to_cos,
 )
+from src.quantum.swap_core import run_swap_phasehash
+from src.learning.phase_embedding import PhaseEmbeddingCosModel
+import torch
 
 def main(config_path):
     with open(config_path, "r") as f:
@@ -44,7 +46,10 @@ def main(config_path):
     base_seed0 = int(cfg.get("base_seed0", 0))
 
     rows = []
-
+    dims = [256]
+    m_list = [128]
+    E_list = [32]
+    include_classical = False
     for rep in range(reps):
         for dim in dims:
             base_seed = base_seed0 + 1000*rep + dim
@@ -73,17 +78,18 @@ def main(config_path):
                             opt_level=opt_level, measure_cost=True
                         )
                     else:
-                        overlap_amp, t_amp = run_swap_amp(
-                            x, y, shots=shots, seed=base_seed,
-                            opt_level=opt_level, measure_cost=False
-                        )
+                        i=0
+                        #overlap_amp, t_amp, p0_ae = run_swap_amp(
+                        #    x, y, shots=shots, seed=base_seed,
+                        #    opt_level=opt_level, measure_cost=False
+                        #)
 
-                    cos_amp = corr_to_cos(overlap_amp)
-                    rows.append([
-                        "AE-SWAP", rep, dim, true_cos, "-", "-",
-                        shots, cos_amp, abs(cos_amp - true_cos),
-                        t_amp, d_amp, q_amp
-                    ])
+                    #cos_amp = corr_to_cos(overlap_amp)
+                    #rows.append([
+                    #    "AE-SWAP", rep, dim, true_cos, "-", "-",
+                    #    shots, cos_amp, abs(cos_amp - true_cos),
+                    #    t_amp, d_amp, q_amp
+                    #])
 
                     # --- Phase-Hash SWAP ---
                     for m in m_list:
@@ -96,19 +102,31 @@ def main(config_path):
                                     measure_cost=True
                                 )
                             else:
-                                cos_ph, t_ph = run_swap_phasehash(
-                                    x, y, m=m, E=E, shots=shots,
+                                model = PhaseEmbeddingCosModel()
+                                state = torch.load("results/phase_embedding_bin.pt", map_location="cpu")
+                                model.load_state_dict(state)
+                                model.eval()
+
+                                value_to_id = {-1.0: 0, 1.0: 1}
+
+                                cos_ph, t_ph, p0_pes = run_swap_phasehash(
+                                    x, y,
+                                    m=m, E=E,
+                                    shots=shots,
                                     seed=base_seed + m + E,
-                                    opt_level=opt_level,
+                                    phase_model=model,
+                                    value_to_id=value_to_id,
                                     measure_cost=False
                                 )
                                 d_ph, q_ph = "-", "-"
-
                             rows.append([
                                 "Phase-Hash (SWAP)", rep, dim, true_cos, m, E,
                                 shots, cos_ph, abs(cos_ph - true_cos),
                                 t_ph, d_ph, q_ph
                             ])
+                    print(f"p0_real={(1+true_cos**2)/2} | ",
+                          f"p0_pes={p0_pes} | ",
+                    )
 
     df = pd.DataFrame(rows, columns=[
         "Method", "Rep", "Dim", "TrueCos", "m", "E", "Shots",

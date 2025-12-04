@@ -12,6 +12,9 @@ from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister, transpile
 from qiskit_aer import AerSimulator
 from qiskit.circuit.library import DiagonalGate
 
+# 🔥 NUEVO: imports para el embedding aprendido
+import torch
+from src.learning.phase_embedding import PhaseEmbeddingCosModel
 
 # ----------------------------------------------------------
 # Basic math / data utilities
@@ -79,8 +82,8 @@ def build_amp_state(vec):
 
 def build_phase_state(bits_pm1):
     """
-    Phase-hash encoding:
-    Start in uniform superposition, then DiagonalGate with ±1 phases.
+    Phase-hash encoding (versión ORIGINAL, fija):
+    Start in uniform superposition, then DiagonalGate with ±i phases.
     bits_pm1 length must be power of 2.
     """
     bits_pm1 = np.asarray(bits_pm1, float)
@@ -92,8 +95,45 @@ def build_phase_state(bits_pm1):
     q = QuantumRegister(n, "data")
     qc = QuantumCircuit(q, name="phase_state")
     qc.h(q)
+    phases = [1j if b > 0 else -1j for b in bits_pm1]
+    qc.append(DiagonalGate(phases), q[:])
+    return qc
 
-    phases = [1.0 if b > 0 else -1.0 for b in bits_pm1]
+
+# 🔥 NUEVO: versión que usa el modelo aprendido de fases
+def embedding_from_model(model, value_to_id, v):
+    """
+    Dado un valor discreto v (ej. -1.0 o 1.0), devuelve un complejo de módulo 1:
+
+        z_v = exp(i * theta_v)
+
+    donde theta_v es aprendido por el modelo.
+    """
+    v_f = float(v)
+    idx = value_to_id[v_f]
+    idx_t = torch.tensor([idx], dtype=torch.long,
+                         device=next(model.parameters()).device)
+    with torch.no_grad():
+        theta = model.emb(idx_t).item()
+    return np.exp(1j * theta)
+
+
+def build_phase_state_learned(bits_pm1, model, value_to_id):
+    """
+    Igual que build_phase_state, pero las fases se obtienen de un modelo
+    entrenado (PhaseEmbeddingModel).
+    """
+    bits_pm1 = np.asarray(bits_pm1, float)
+    m = len(bits_pm1)
+    n = int(math.log2(m))
+    if 2**n != m:
+        raise ValueError(f"bits_pm1 length {m} is not power of 2")
+
+    q = QuantumRegister(n, "data")
+    qc = QuantumCircuit(q, name="phase_state_learned")
+    qc.h(q)
+
+    phases = [embedding_from_model(model, value_to_id, b) for b in bits_pm1]
     qc.append(DiagonalGate(phases), q[:])
     return qc
 
@@ -175,18 +215,26 @@ def run_swap_amp(x, y, shots=2048, seed=None, opt_level=3, measure_cost=False):
     overlap = corr_abs_from_p0(p0)
 
     if not measure_cost:
-        return overlap, elapsed
+        return overlap, elapsed, p0
 
     return overlap, elapsed, tqc.depth(), count_twoq(tqc)
 
 
 def run_swap_phasehash(x, y, m, E, shots=2048, seed=123,
-                       opt_level=3, measure_cost=False):
+                       opt_level=3, measure_cost=False,
+                       phase_model=None, value_to_id=None):
     """
     Phase-hash SWAP with E ensemble repetitions.
 
+    Si phase_model y value_to_id son None:
+        -> usa el encoding fijo original (±i).
+
+    Si phase_model y value_to_id se proporcionan:
+        -> usa el embedding aprendido: cada valor discreto v
+           se mapea a exp(i * theta_v) según el modelo.
+
     Returns:
-      cos_hat, elapsed  (or plus avg depth,twoq if measure_cost)
+      cos_hat, elapsed  (o plus avg depth,twoq si measure_cost=True)
     """
     sim = AerSimulator()
     rng = np.random.default_rng(seed)
@@ -195,15 +243,25 @@ def run_swap_phasehash(x, y, m, E, shots=2048, seed=123,
     depths, twoqs = [], []
 
     t0 = time.time()
+    p0_pes = 0.0
+
     for _ in range(E):
+        # Hashing SimHash → vectores binarios ±1
         R = rng.standard_normal((m, len(x)))
         b = np.where(R @ x >= 0, 1.0, -1.0)
         c = np.where(R @ y >= 0, 1.0, -1.0)
 
+        # Sign proxy clásico (igual que antes)
         sign_proxy = np.sign(np.mean(b*c)) or 1.0
 
-        prep_b = build_phase_state(b)
-        prep_c = build_phase_state(c)
+        # 🔥 Aquí decidimos si usar embedding fijo o aprendido
+        if (phase_model is not None) and (value_to_id is not None):
+            prep_b = build_phase_state_learned(b, phase_model, value_to_id)
+            prep_c = build_phase_state_learned(c, phase_model, value_to_id)
+        else:
+            prep_b = build_phase_state(b)
+            prep_c = build_phase_state(c)
+
         qc = build_swap_test(prep_b, prep_c)
 
         seed_t = int(rng.integers(0, 1 << 30))
@@ -214,20 +272,23 @@ def run_swap_phasehash(x, y, m, E, shots=2048, seed=123,
         res = sim.run(tqc, shots=shots, seed_simulator=seed_s).result()
 
         p0 = p0_from_counts(res.get_counts(tqc))
+        p0_pes += p0
+
         corr_abs = corr_abs_from_p0(p0)
         corr_signed = corr_abs * sign_proxy
-
         corr_list.append(corr_signed)
 
         if measure_cost:
             depths.append(tqc.depth())
             twoqs.append(count_twoq(tqc))
 
+    p0_pes /= E
     elapsed = time.time() - t0
     corr_hat = float(np.mean(corr_list))
     cos_hat = corr_to_cos(corr_hat)
 
     if not measure_cost:
-        return cos_hat, elapsed
+        # Devolvemos también p0_pes para comparar con p0_real si quieres
+        return cos_hat, elapsed, p0_pes
 
     return cos_hat, elapsed, float(np.mean(depths)), float(np.mean(twoqs))

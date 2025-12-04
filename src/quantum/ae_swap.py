@@ -82,4 +82,4 @@ def run_ae_swap(x,
     corr_abs = corr_abs_from_p0(p0)
     cos_est = corr_to_cos(corr_abs)
 
-    return cos_est, t_quantum
+    return cos_est, t_quantum, p0
