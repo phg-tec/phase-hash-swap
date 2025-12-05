@@ -45,9 +45,9 @@ def main(config_path):
     base_seed0 = int(cfg.get("base_seed0", 0))
 
     rows = []
-    dims = [256]
-    m_list = [128]
-    E_list = [64]
+    dims = [1024]
+    m_list = [512]
+    E_list = [32]
     cos_targets = [0.0, 0.25, 0.5, 0.75, 1]
     reps = 1
     include_classical = False
