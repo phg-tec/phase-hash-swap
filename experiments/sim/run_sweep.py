@@ -10,6 +10,7 @@ from pathlib import Path
 import pandas as pd
 
 import os,sys
+import math
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..", ".."))
 if PROJECT_ROOT not in sys.path:
@@ -24,8 +25,6 @@ from src.quantum.swap_core import (
     corr_to_cos,
 )
 from src.quantum.swap_core import run_swap_phasehash
-from src.learning.phase_embedding import PhaseEmbeddingCosModel
-import torch
 
 def main(config_path):
     with open(config_path, "r") as f:
@@ -48,7 +47,9 @@ def main(config_path):
     rows = []
     dims = [256]
     m_list = [128]
-    E_list = [32]
+    E_list = [64]
+    cos_targets = [0.0, 0.25, 0.5, 0.75, 1]
+    reps = 1
     include_classical = False
     for rep in range(reps):
         for dim in dims:
@@ -79,17 +80,17 @@ def main(config_path):
                         )
                     else:
                         i=0
-                        #overlap_amp, t_amp, p0_ae = run_swap_amp(
-                        #    x, y, shots=shots, seed=base_seed,
-                        #    opt_level=opt_level, measure_cost=False
-                        #)
+                        overlap_amp, t_amp, p0_ae = run_swap_amp(
+                            x, y, shots=shots, seed=base_seed,
+                            opt_level=opt_level, measure_cost=False
+                        )
 
-                    #cos_amp = corr_to_cos(overlap_amp)
-                    #rows.append([
-                    #    "AE-SWAP", rep, dim, true_cos, "-", "-",
-                    #    shots, cos_amp, abs(cos_amp - true_cos),
-                    #    t_amp, d_amp, q_amp
-                    #])
+                    cos_amp = corr_to_cos(overlap_amp)
+                    rows.append([
+                        "AE-SWAP", rep, dim, true_cos, "-", "-",
+                        shots, cos_amp, abs(cos_amp - true_cos),
+                        t_amp, d_amp, q_amp
+                    ])
 
                     # --- Phase-Hash SWAP ---
                     for m in m_list:
@@ -117,8 +118,15 @@ def main(config_path):
                                 shots, cos_ph, abs(cos_ph - true_cos),
                                 t_ph, d_ph, q_ph
                             ])
-                    print(f"p0_real={(1+true_cos**2)/2} | ",
+                    p0_real=(1+true_cos**2)/2
+                    print(f"p0_real={p0_real} | ",
                           f"p0_pes={p0_pes} | ",
+                          f"p0_ae={p0_ae} | ",
+                          f"cos_real={true_cos} | "
+                          f"cos_pes={math.sqrt(max(0,2*p0_pes -1))} | "
+                          f"cos_ae={math.sqrt(max(0,2*p0_ae -1))} | ",
+                          f"mae_cos={abs(true_cos - math.sqrt(max(0,2*p0_pes -1)))}"
+                          f"\n (+bueno, -malo)={abs(p0_real-p0_ae) - abs(p0_real-p0_pes)}"
                     )
 
     df = pd.DataFrame(rows, columns=[

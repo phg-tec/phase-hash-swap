@@ -11,6 +11,17 @@ from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister, transpile
 from qiskit_aer import AerSimulator
 from qiskit.circuit.library import DiagonalGate
 
+
+from src.quantum.phase_embedding_cma import (
+    true_cos_from_bits,
+    phases_from_cos,
+    phases_to_complex,
+    map_binary_to_complex,
+)
+
+# Cargar parámetros aprendidos UNA VEZ
+_phase_params_cos = np.load("learned_phase_params_cos.npy")  # [a0,a1,a2,b0,b1,b2]
+
 # =========================================================
 # NORMALIZAR / UTILIDADES
 # =========================================================
@@ -68,24 +79,42 @@ def build_amp_state(vec):
     return qc
 
 
-def build_phase_state_custom(phases):
+
+
+def build_phase_state_cos_dependent(bits_pm1_x, bits_pm1_y):
     """
-    phases: lista compleja de tamaño 2^n con los valores exp(iθ)
+    Construye el estado |psi_x> para un vector binario bits_pm1_x,
+    usando fases que dependen del coseno entre (x,y).
     """
-    phases = np.asarray(phases, complex)
-    m = len(phases)
+    bits_pm1_x = np.asarray(bits_pm1_x)
+    bits_pm1_y = np.asarray(bits_pm1_y)
+
+    m = len(bits_pm1_x)
+    if len(bits_pm1_y) != m:
+        raise ValueError("x e y deben tener la misma longitud.")
+
     n = int(math.log2(m))
-
     if 2**n != m:
-        raise ValueError("El número de fases no es potencia de 2.")
+        raise ValueError("La longitud debe ser potencia de 2.")
 
-    q = QuantumRegister(n, 'data')
-    qc = QuantumCircuit(q, name='phase_custom')
+    # 1) coseno entre bits
+    cos_xy = true_cos_from_bits(bits_pm1_x, bits_pm1_y)
+
+    # 2) fases condicionadas al coseno
+    phi_minus, phi_plus = phases_from_cos(cos_xy, _phase_params_cos)
+
+    # 3) complejos unitarios
+    z_minus, z_plus = phases_to_complex(phi_minus, phi_plus)
+
+    # 4) mapear el vector x a complejos
+    diag_x = map_binary_to_complex(bits_pm1_x, z_minus, z_plus)
+
+    q = QuantumRegister(n, "data")
+    qc = QuantumCircuit(q)
     qc.h(q)
-    qc.append(DiagonalGate(phases.tolist()), q[:])
+    qc.append(DiagonalGate(diag_x), q)
+
     return qc
-
-
 # =========================================================
 # SWAP TEST
 # =========================================================
@@ -136,18 +165,6 @@ def count_twoq(tcirc):
     return total
 
 
-# =========================================================
-# IMPORTAR MODELO APRENDIDO
-# =========================================================
-
-from src.learning.phase_embedding import PhaseEmbeddingCosModel
-
-def load_phase_embedding_model(path="results/phase_embedding_by_cos.pt", device="cpu"):
-    model = PhaseEmbeddingCosModel().to(device)
-    model.load_state_dict(torch.load(path, map_location=device))
-    model.eval()
-    return model
-
 
 # =========================================================
 # RUNNERS: AE-SWAP
@@ -190,9 +207,6 @@ def run_swap_phasehash(x, y, m, E, shots=2048, seed=123,
       - ejecuta swap test
     """
 
-    if model is None:
-        model = load_phase_embedding_model(device=device)
-
     sim = AerSimulator()
     rng = np.random.default_rng(seed)
 
@@ -208,27 +222,10 @@ def run_swap_phasehash(x, y, m, E, shots=2048, seed=123,
         R = rng.standard_normal((m, len(x)))
         b = np.where(R @ x >= 0, 1.0, -1.0)
         c = np.where(R @ y >= 0, 1.0, -1.0)
-
-        # correlación binaria ~ cos_target
-        cos_est = float(np.mean(b * c))
-
-        # === 2. Obtener (theta_plus, theta_minus) del modelo ===
-        with torch.no_grad():
-            cos_t = torch.tensor([[cos_est]], dtype=torch.float32).to(device)
-            th_plus, th_minus = model(cos_t)
-            th_plus  = float(th_plus)
-            th_minus = float(th_minus)
-
-        # === 3. Codificar fases ===
-        z_plus  = np.exp(1j * th_plus)
-        z_minus = np.exp(1j * th_minus)
-
-        phases_b = np.array([z_plus if v > 0 else z_minus for v in b], dtype=complex)
-        phases_c = np.array([z_plus if v > 0 else z_minus for v in c], dtype=complex)
-
+        
         # === 4. Preparar estados cuánticos ===
-        prep_b = build_phase_state_custom(phases_b)
-        prep_c = build_phase_state_custom(phases_c)
+        prep_b = build_phase_state_cos_dependent(b, c)
+        prep_c = build_phase_state_cos_dependent(c, b)
 
         # === 5. Ejecutar SWAP ===
         seed_t = int(rng.integers(0, 1 << 30))
@@ -245,7 +242,7 @@ def run_swap_phasehash(x, y, m, E, shots=2048, seed=123,
         corr_abs = corr_abs_from_p0(p0)
 
         # firmar con la correlación binaria
-        sign_proxy = np.sign(cos_est) or 1.0
+        sign_proxy = np.sign(np.mean(x*y)) or 1.0
         corr_signed = corr_abs * sign_proxy
         corr_list.append(corr_signed)
 
